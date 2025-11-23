@@ -8,7 +8,13 @@ app.use(cors());
 
 // Serve static files from the client build directory
 const path = require('path');
-app.use(express.static(path.join(__dirname, '../client/out')));
+// On Render, the path might be slightly different or the build didn't output to 'out'
+// Let's try to be more robust or check where the build went.
+// For Next.js 'output: export', it goes to 'out'.
+// The error says: /opt/render/project/src/client/out/index.html not found.
+// This implies the build didn't run or didn't output there.
+// But assuming it did, let's use a safer path resolution.
+app.use(express.static(path.join(process.cwd(), 'client/out')));
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -66,7 +72,7 @@ io.on('connection', (socket) => {
 
 // Handle React routing, return all requests to React app
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/out/index.html'));
+    res.sendFile(path.join(process.cwd(), 'client/out/index.html'));
 });
 
 function getRoomUsers(roomId) {
