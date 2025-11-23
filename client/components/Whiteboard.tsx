@@ -14,7 +14,8 @@ import {
     PenTool,
     Square,
     Circle,
-    Minus
+    Minus,
+    Type
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -26,7 +27,7 @@ interface WhiteboardProps {
     onLeave: () => void;
 }
 
-type Tool = 'pencil' | 'marker' | 'highlighter' | 'rectangle' | 'circle' | 'line';
+type Tool = 'pencil' | 'marker' | 'highlighter' | 'rectangle' | 'circle' | 'line' | 'text';
 
 export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -39,6 +40,7 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
     const [isDrawing, setIsDrawing] = useState(false);
     const [users, setUsers] = useState<{ userName: string }[]>([]);
     const [isUserListOpen, setIsUserListOpen] = useState(false);
+    const [textInput, setTextInput] = useState<{ x: number; y: number; value: string } | null>(null);
 
     const startPos = useRef<{ x: number; y: number } | null>(null);
 
@@ -63,9 +65,11 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
 
         // Socket events
         socket.on('draw', (data) => {
-            const { type, x0, y0, x1, y1, color, width, alpha } = data;
+            const { type, x0, y0, x1, y1, color, width, alpha, text } = data;
             if (type === 'freehand') {
                 drawLine(ctx, x0, y0, x1, y1, color, width, alpha);
+            } else if (type === 'text') {
+                drawText(ctx, text, x0, y0, color, width);
             } else {
                 drawShape(ctx, type, x0, y0, x1, y1, color, width, alpha);
             }
@@ -107,6 +111,7 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
             case 'pencil': return { width: 2, alpha: 1 };
             case 'marker': return { width: 5, alpha: 1 };
             case 'highlighter': return { width: 15, alpha: 0.4 };
+            case 'text': return { width: 20, alpha: 1 }; // width here acts as font size
             default: return { width: strokeWidth, alpha: 1 };
         }
     };
@@ -168,6 +173,19 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
         ctx.globalAlpha = 1.0;
     };
 
+    const drawText = (
+        ctx: CanvasRenderingContext2D,
+        text: string,
+        x: number,
+        y: number,
+        color: string,
+        fontSize: number
+    ) => {
+        ctx.font = `${fontSize}px sans-serif`;
+        ctx.fillStyle = color;
+        ctx.fillText(text, x, y);
+    };
+
     const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
         // Prevent scrolling on touch devices
         if (e.type === 'touchstart') {
@@ -177,12 +195,17 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
         const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
         const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
 
+        if (tool === 'text') {
+            setTextInput({ x: clientX, y: clientY, value: '' });
+            return;
+        }
+
         setIsDrawing(true);
         startPos.current = { x: clientX, y: clientY };
     };
 
     const handleMouseMove = (e: React.MouseEvent | React.TouchEvent) => {
-        if (!isDrawing || !startPos.current) return;
+        if (!isDrawing || !startPos.current || tool === 'text') return;
 
         const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
         const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
@@ -230,7 +253,7 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
     };
 
     const handleMouseUp = (e: React.MouseEvent | React.TouchEvent) => {
-        if (!isDrawing || !startPos.current) return;
+        if (!isDrawing || !startPos.current || tool === 'text') return;
 
         // For touchend, we might need to use changedTouches if touches is empty
         let clientX = startPos.current.x; // Fallback
@@ -285,6 +308,33 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
 
         setIsDrawing(false);
         startPos.current = null;
+    };
+
+    const handleTextSubmit = () => {
+        if (!textInput || !textInput.value.trim()) {
+            setTextInput(null);
+            return;
+        }
+
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        const fontSize = getToolSettings().width; // Use width from tool settings as font size
+        drawText(ctx, textInput.value, textInput.x, textInput.y, color, fontSize);
+
+        socket.emit('draw', {
+            type: 'text',
+            x0: textInput.x,
+            y0: textInput.y,
+            text: textInput.value,
+            color,
+            width: fontSize,
+            roomId
+        });
+
+        setTextInput(null);
     };
 
     const clearBoard = () => {
@@ -360,7 +410,7 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
             </div>
 
             {/* Floating Toolbar */}
-            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4 px-6 py-3 bg-white rounded-full shadow-xl border border-gray-200">
+            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4 px-6 py-3 bg-white rounded-full shadow-xl border border-gray-200 overflow-x-auto max-w-[90vw]">
                 {/* Tools */}
                 <div className="flex items-center gap-1 pr-4 border-r border-gray-200">
                     <button
@@ -386,7 +436,7 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
                     </button>
                 </div>
 
-                {/* Shapes */}
+                {/* Shapes & Text */}
                 <div className="flex items-center gap-1 pr-4 border-r border-gray-200">
                     <button
                         onClick={() => { setTool('line'); setStrokeWidth(2); }}
@@ -408,6 +458,13 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
                         title="Circle"
                     >
                         <Circle size={20} />
+                    </button>
+                    <button
+                        onClick={() => { setTool('text'); }}
+                        className={clsx("p-2 rounded-full transition-all", tool === 'text' ? "bg-blue-100 text-blue-600" : "text-gray-500 hover:bg-gray-100")}
+                        title="Text"
+                    >
+                        <Type size={20} />
                     </button>
                 </div>
 
@@ -464,6 +521,27 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
                 onTouchEnd={handleMouseUp}
                 className="absolute top-0 left-0 w-full h-full cursor-crosshair touch-none z-10"
             />
+
+            {/* Text Input Overlay */}
+            {textInput && (
+                <input
+                    autoFocus
+                    className="absolute z-30 p-1 border border-blue-500 rounded bg-transparent outline-none text-xl font-sans"
+                    style={{
+                        left: textInput.x,
+                        top: textInput.y,
+                        color: color,
+                        transform: 'translateY(-50%)'
+                    }}
+                    value={textInput.value}
+                    onChange={(e) => setTextInput({ ...textInput, value: e.target.value })}
+                    onBlur={handleTextSubmit}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleTextSubmit();
+                        if (e.key === 'Escape') setTextInput(null);
+                    }}
+                />
+            )}
         </div>
     );
 }
