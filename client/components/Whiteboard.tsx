@@ -11,11 +11,14 @@ import {
     Users,
     LogOut,
     ChevronDown,
-    PenTool
+    PenTool,
+    Square,
+    Circle,
+    Minus
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
-const socket = io('http://localhost:3001');
+const socket = io(process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3001');
 
 interface WhiteboardProps {
     roomId: string;
@@ -23,10 +26,11 @@ interface WhiteboardProps {
     onLeave: () => void;
 }
 
-type Tool = 'pencil' | 'marker' | 'highlighter';
+type Tool = 'pencil' | 'marker' | 'highlighter' | 'rectangle' | 'circle' | 'line';
 
 export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
     // State
     const [color, setColor] = useState('#000000');
@@ -36,13 +40,14 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
     const [users, setUsers] = useState<{ userName: string }[]>([]);
     const [isUserListOpen, setIsUserListOpen] = useState(false);
 
-    const lastPos = useRef<{ x: number; y: number } | null>(null);
+    const startPos = useRef<{ x: number; y: number } | null>(null);
 
     useEffect(() => {
         socket.emit('join-room', { roomId, userName });
 
         const canvas = canvasRef.current;
-        if (!canvas) return;
+        const previewCanvas = previewCanvasRef.current;
+        if (!canvas || !previewCanvas) return;
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
@@ -50,14 +55,20 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
         const resize = () => {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
+            previewCanvas.width = window.innerWidth;
+            previewCanvas.height = window.innerHeight;
         }
         resize();
         window.addEventListener('resize', resize);
 
         // Socket events
         socket.on('draw', (data) => {
-            const { x0, y0, x1, y1, color, width, alpha } = data;
-            drawLine(x0, y0, x1, y1, color, width, alpha, false);
+            const { type, x0, y0, x1, y1, color, width, alpha } = data;
+            if (type === 'freehand') {
+                drawLine(ctx, x0, y0, x1, y1, color, width, alpha);
+            } else {
+                drawShape(ctx, type, x0, y0, x1, y1, color, width, alpha);
+            }
         });
 
         socket.on('clear', () => {
@@ -96,25 +107,20 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
             case 'pencil': return { width: 2, alpha: 1 };
             case 'marker': return { width: 5, alpha: 1 };
             case 'highlighter': return { width: 15, alpha: 0.4 };
-            default: return { width: 2, alpha: 1 };
+            default: return { width: strokeWidth, alpha: 1 };
         }
     };
 
     const drawLine = (
+        ctx: CanvasRenderingContext2D,
         x0: number,
         y0: number,
         x1: number,
         y1: number,
         color: string,
         width: number,
-        alpha: number,
-        emit: boolean
+        alpha: number
     ) => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
         ctx.beginPath();
         ctx.moveTo(x0, y0);
         ctx.lineTo(x1, y1);
@@ -126,32 +132,141 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
         ctx.stroke();
         ctx.closePath();
         ctx.globalAlpha = 1.0; // Reset
+    };
 
-        if (emit) {
-            socket.emit('draw', { x0, y0, x1, y1, color, width, alpha, roomId });
+    const drawShape = (
+        ctx: CanvasRenderingContext2D,
+        type: 'rectangle' | 'circle' | 'line',
+        x0: number,
+        y0: number,
+        x1: number,
+        y1: number,
+        color: string,
+        width: number,
+        alpha: number
+    ) => {
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.globalAlpha = alpha;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        if (type === 'rectangle') {
+            ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+        } else if (type === 'circle') {
+            const radius = Math.sqrt(Math.pow(x1 - x0, 2) + Math.pow(y1 - y0, 2));
+            ctx.arc(x0, y0, radius, 0, 2 * Math.PI);
+            ctx.stroke();
+        } else if (type === 'line') {
+            ctx.moveTo(x0, y0);
+            ctx.lineTo(x1, y1);
+            ctx.stroke();
         }
+
+        ctx.closePath();
+        ctx.globalAlpha = 1.0;
     };
 
     const handleMouseDown = (e: React.MouseEvent) => {
         setIsDrawing(true);
-        lastPos.current = { x: e.clientX, y: e.clientY };
+        startPos.current = { x: e.clientX, y: e.clientY };
     };
 
     const handleMouseMove = (e: React.MouseEvent) => {
-        if (!isDrawing || !lastPos.current) return;
+        if (!isDrawing || !startPos.current) return;
+
+        const canvas = canvasRef.current;
+        const previewCanvas = previewCanvasRef.current;
+        if (!canvas || !previewCanvas) return;
+
+        const ctx = canvas.getContext('2d');
+        const previewCtx = previewCanvas.getContext('2d');
+        if (!ctx || !previewCtx) return;
 
         const { width, alpha } = getToolSettings();
-        // Use custom stroke width if set, otherwise default to tool
-        // Requirement: "width setting". Let's use state strokeWidth if user adjusted it, else tool default?
-        // Let's make the slider control the current tool's width.
+        // Use state strokeWidth for shapes, or tool default for freehand tools
+        const currentWidth = ['pencil', 'marker', 'highlighter'].includes(tool) ? width : strokeWidth;
+        const currentAlpha = tool === 'highlighter' ? 0.4 : 1;
 
-        drawLine(lastPos.current.x, lastPos.current.y, e.clientX, e.clientY, color, strokeWidth, tool === 'highlighter' ? 0.4 : 1, true);
-        lastPos.current = { x: e.clientX, y: e.clientY };
+        if (['pencil', 'marker', 'highlighter'].includes(tool)) {
+            // Freehand: Draw directly on main canvas
+            drawLine(ctx, startPos.current.x, startPos.current.y, e.clientX, e.clientY, color, currentWidth, currentAlpha);
+            socket.emit('draw', {
+                type: 'freehand',
+                x0: startPos.current.x,
+                y0: startPos.current.y,
+                x1: e.clientX,
+                y1: e.clientY,
+                color,
+                width: currentWidth,
+                alpha: currentAlpha,
+                roomId
+            });
+            startPos.current = { x: e.clientX, y: e.clientY };
+        } else {
+            // Shapes: Draw on preview canvas
+            previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+            drawShape(
+                previewCtx,
+                tool as 'rectangle' | 'circle' | 'line',
+                startPos.current.x,
+                startPos.current.y,
+                e.clientX,
+                e.clientY,
+                color,
+                currentWidth,
+                currentAlpha
+            );
+        }
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: React.MouseEvent) => {
+        if (!isDrawing || !startPos.current) return;
+
+        const canvas = canvasRef.current;
+        const previewCanvas = previewCanvasRef.current;
+        if (!canvas || !previewCanvas) return;
+
+        const ctx = canvas.getContext('2d');
+        const previewCtx = previewCanvas.getContext('2d');
+        if (!ctx || !previewCtx) return;
+
+        if (!['pencil', 'marker', 'highlighter'].includes(tool)) {
+            // Commit shape to main canvas
+            const currentWidth = strokeWidth;
+            const currentAlpha = 1; // Shapes are solid for now
+
+            drawShape(
+                ctx,
+                tool as 'rectangle' | 'circle' | 'line',
+                startPos.current.x,
+                startPos.current.y,
+                e.clientX,
+                e.clientY,
+                color,
+                currentWidth,
+                currentAlpha
+            );
+
+            socket.emit('draw', {
+                type: tool,
+                x0: startPos.current.x,
+                y0: startPos.current.y,
+                x1: e.clientX,
+                y1: e.clientY,
+                color,
+                width: currentWidth,
+                alpha: currentAlpha,
+                roomId
+            });
+
+            // Clear preview
+            previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+        }
+
         setIsDrawing(false);
-        lastPos.current = null;
+        startPos.current = null;
     };
 
     const clearBoard = () => {
@@ -253,6 +368,31 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
                     </button>
                 </div>
 
+                {/* Shapes */}
+                <div className="flex items-center gap-1 pr-4 border-r border-gray-200">
+                    <button
+                        onClick={() => { setTool('line'); setStrokeWidth(2); }}
+                        className={clsx("p-2 rounded-full transition-all", tool === 'line' ? "bg-blue-100 text-blue-600" : "text-gray-500 hover:bg-gray-100")}
+                        title="Line"
+                    >
+                        <Minus size={20} className="-rotate-45" />
+                    </button>
+                    <button
+                        onClick={() => { setTool('rectangle'); setStrokeWidth(2); }}
+                        className={clsx("p-2 rounded-full transition-all", tool === 'rectangle' ? "bg-blue-100 text-blue-600" : "text-gray-500 hover:bg-gray-100")}
+                        title="Rectangle"
+                    >
+                        <Square size={20} />
+                    </button>
+                    <button
+                        onClick={() => { setTool('circle'); setStrokeWidth(2); }}
+                        className={clsx("p-2 rounded-full transition-all", tool === 'circle' ? "bg-blue-100 text-blue-600" : "text-gray-500 hover:bg-gray-100")}
+                        title="Circle"
+                    >
+                        <Circle size={20} />
+                    </button>
+                </div>
+
                 {/* Color Picker */}
                 <div className="flex items-center gap-2 pr-4 border-r border-gray-200">
                     <input
@@ -292,11 +432,16 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
 
             <canvas
                 ref={canvasRef}
+                className="absolute top-0 left-0 w-full h-full"
+            />
+            {/* Preview Canvas for Shapes */}
+            <canvas
+                ref={previewCanvasRef}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
-                className="cursor-crosshair touch-none w-full h-full"
+                className="absolute top-0 left-0 w-full h-full cursor-crosshair touch-none z-10"
             />
         </div>
     );
