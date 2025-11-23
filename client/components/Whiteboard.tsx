@@ -168,13 +168,24 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
         ctx.globalAlpha = 1.0;
     };
 
-    const handleMouseDown = (e: React.MouseEvent) => {
+    const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
+        // Prevent scrolling on touch devices
+        if (e.type === 'touchstart') {
+            // e.preventDefault(); // React synthetic events might not support this directly here, handled in CSS/passive listeners usually
+        }
+
+        const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+        const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+
         setIsDrawing(true);
-        startPos.current = { x: e.clientX, y: e.clientY };
+        startPos.current = { x: clientX, y: clientY };
     };
 
-    const handleMouseMove = (e: React.MouseEvent) => {
+    const handleMouseMove = (e: React.MouseEvent | React.TouchEvent) => {
         if (!isDrawing || !startPos.current) return;
+
+        const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+        const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
 
         const canvas = canvasRef.current;
         const previewCanvas = previewCanvasRef.current;
@@ -185,35 +196,32 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
         if (!ctx || !previewCtx) return;
 
         const { width, alpha } = getToolSettings();
-        // Use state strokeWidth for shapes, or tool default for freehand tools
         const currentWidth = ['pencil', 'marker', 'highlighter'].includes(tool) ? width : strokeWidth;
         const currentAlpha = tool === 'highlighter' ? 0.4 : 1;
 
         if (['pencil', 'marker', 'highlighter'].includes(tool)) {
-            // Freehand: Draw directly on main canvas
-            drawLine(ctx, startPos.current.x, startPos.current.y, e.clientX, e.clientY, color, currentWidth, currentAlpha);
+            drawLine(ctx, startPos.current.x, startPos.current.y, clientX, clientY, color, currentWidth, currentAlpha);
             socket.emit('draw', {
                 type: 'freehand',
                 x0: startPos.current.x,
                 y0: startPos.current.y,
-                x1: e.clientX,
-                y1: e.clientY,
+                x1: clientX,
+                y1: clientY,
                 color,
                 width: currentWidth,
                 alpha: currentAlpha,
                 roomId
             });
-            startPos.current = { x: e.clientX, y: e.clientY };
+            startPos.current = { x: clientX, y: clientY };
         } else {
-            // Shapes: Draw on preview canvas
             previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
             drawShape(
                 previewCtx,
                 tool as 'rectangle' | 'circle' | 'line',
                 startPos.current.x,
                 startPos.current.y,
-                e.clientX,
-                e.clientY,
+                clientX,
+                clientY,
                 color,
                 currentWidth,
                 currentAlpha
@@ -221,8 +229,20 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
         }
     };
 
-    const handleMouseUp = (e: React.MouseEvent) => {
+    const handleMouseUp = (e: React.MouseEvent | React.TouchEvent) => {
         if (!isDrawing || !startPos.current) return;
+
+        // For touchend, we might need to use changedTouches if touches is empty
+        let clientX = startPos.current.x; // Fallback
+        let clientY = startPos.current.y;
+
+        if ('changedTouches' in e && e.changedTouches.length > 0) {
+            clientX = e.changedTouches[0].clientX;
+            clientY = e.changedTouches[0].clientY;
+        } else if ('clientX' in e) {
+            clientX = (e as React.MouseEvent).clientX;
+            clientY = (e as React.MouseEvent).clientY;
+        }
 
         const canvas = canvasRef.current;
         const previewCanvas = previewCanvasRef.current;
@@ -233,17 +253,16 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
         if (!ctx || !previewCtx) return;
 
         if (!['pencil', 'marker', 'highlighter'].includes(tool)) {
-            // Commit shape to main canvas
             const currentWidth = strokeWidth;
-            const currentAlpha = 1; // Shapes are solid for now
+            const currentAlpha = 1;
 
             drawShape(
                 ctx,
                 tool as 'rectangle' | 'circle' | 'line',
                 startPos.current.x,
                 startPos.current.y,
-                e.clientX,
-                e.clientY,
+                clientX,
+                clientY,
                 color,
                 currentWidth,
                 currentAlpha
@@ -253,15 +272,14 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
                 type: tool,
                 x0: startPos.current.x,
                 y0: startPos.current.y,
-                x1: e.clientX,
-                y1: e.clientY,
+                x1: clientX,
+                y1: clientY,
                 color,
                 width: currentWidth,
                 alpha: currentAlpha,
                 roomId
             });
 
-            // Clear preview
             previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
         }
 
@@ -441,6 +459,9 @@ export default function Whiteboard({ roomId, userName, onLeave }: WhiteboardProp
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
+                onTouchStart={handleMouseDown}
+                onTouchMove={handleMouseMove}
+                onTouchEnd={handleMouseUp}
                 className="absolute top-0 left-0 w-full h-full cursor-crosshair touch-none z-10"
             />
         </div>
