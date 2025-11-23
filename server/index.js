@@ -6,10 +6,14 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
+// Serve static files from the client build directory
+const path = require('path');
+app.use(express.static(path.join(__dirname, '../client/out')));
+
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: "*",
+        origin: "*", // Allow all origins for simplicity in this setup
         methods: ["GET", "POST"]
     }
 });
@@ -58,6 +62,11 @@ io.on('connection', (socket) => {
 
     socket.on('leave-room', handleLeave);
     socket.on('disconnect', handleLeave);
+});
+
+// Handle React routing, return all requests to React app
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../client/out/index.html'));
 });
 
 function getRoomUsers(roomId) {

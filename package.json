@@ -4,8 +4,11 @@
     "description": "Real-time collaborative whiteboard",
     "main": "server/index.js",
     "scripts": {
-        "start": "node server/index.js",
-        "build": "echo 'No build step for server'"
+        "install-client": "cd client && npm install",
+        "build-client": "cd client && npm run build",
+        "install-server": "cd server && npm install",
+        "build": "npm run install-client && npm run install-server && npm run build-client",
+        "start": "node server/index.js"
     },
     "dependencies": {
         "cors": "^2.8.5",
