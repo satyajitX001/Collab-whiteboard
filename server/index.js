@@ -8,13 +8,25 @@ app.use(cors());
 
 // Serve static files from the client build directory
 const path = require('path');
-// On Render, the path might be slightly different or the build didn't output to 'out'
-// Let's try to be more robust or check where the build went.
-// For Next.js 'output: export', it goes to 'out'.
-// The error says: /opt/render/project/src/client/out/index.html not found.
-// This implies the build didn't run or didn't output there.
-// But assuming it did, let's use a safer path resolution.
-app.use(express.static(path.join(process.cwd(), 'client/out')));
+// Debugging: Log the current directory and check if client/out exists
+console.log('Current working directory:', process.cwd());
+const fs = require('fs');
+const clientBuildPath = path.join(process.cwd(), 'client/out');
+console.log('Looking for client build at:', clientBuildPath);
+
+if (fs.existsSync(clientBuildPath)) {
+    console.log('Client build directory found!');
+    console.log('Contents:', fs.readdirSync(clientBuildPath));
+} else {
+    console.error('Client build directory NOT found!');
+    // Fallback or list parent directories to see structure
+    console.log('Root contents:', fs.readdirSync(process.cwd()));
+    if (fs.existsSync(path.join(process.cwd(), 'client'))) {
+        console.log('Client dir contents:', fs.readdirSync(path.join(process.cwd(), 'client')));
+    }
+}
+
+app.use(express.static(clientBuildPath));
 
 const server = http.createServer(app);
 const io = new Server(server, {
